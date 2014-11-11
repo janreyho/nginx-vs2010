@@ -75,9 +75,23 @@
 
 
 struct ngx_command_s {
-    ngx_str_t             name;
-    ngx_uint_t            type;
+    ngx_str_t             name;	//指令名，与配置文件中一致
+    ngx_uint_t            type;	//指令类型
+	/**
+	 * 回调函数，解析配置文件时，遇到该类型指令时调用
+	 * cf:配置参数信息cf->args(ngx_array_t类型) 以及 指令对应的模块上下文cf->ctx
+	 * 解析不用模块的指令时，上下文信息不同
+	 * 解析core module时，cf->ctx是ngx_cycle->conf_ctx，也就是所有core module数组
+	 * 解析http module时，cf->ctx是ngx_http_conf_ctx_t类型
+	 * cmd:指令对应的ngx_command_t结构
+	 * conf:指令对应的模块配置信息
+	**/
     char               *(*set)(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
+	/**
+	 * 对于http module有效
+	 * http module配置结构信息(main、srv、loc)都存放在ngx_http_conf_ctx_t中对应数组
+	 * conf指示这个指令的配置结构式main、srv还是loc
+	**/
     ngx_uint_t            conf;
     ngx_uint_t            offset;
     void                 *post;
@@ -108,8 +122,8 @@ struct ngx_open_file_s {
 #define NGX_MODULE_V1_PADDING  0, 0, 0, 0, 0, 0, 0, 0
 
 struct ngx_module_s {
-    ngx_uint_t            ctx_index;
-    ngx_uint_t            index;
+    ngx_uint_t            ctx_index;	//具体类型模块(http、event)
+    ngx_uint_t            index;	//所有模块(ngx_module_t)存放在ngx_modules数组
 
     ngx_uint_t            spare0;
     ngx_uint_t            spare1;
@@ -118,14 +132,37 @@ struct ngx_module_s {
 
     ngx_uint_t            version;
 
+	/**
+	 * 模块上下文属性
+	 * 同一类型的模块属性是相同的
+	 * core module 的ctx是ngx_core_module_t类型
+	 * http module 的ctx是ngx_http_module_t类型
+	 * event module 的ctx是ngx_event_module_t类型
+	 * 
+	 * 相同类型的模块分开处理
+	 * 所有http module由ngx_http_module解析处理
+	 * 所有event module由ngx_events_module解析处理
+	**/
     void                 *ctx;
-    ngx_command_t        *commands;
+    ngx_command_t        *commands;		//模块支持的指令数组，最后一个空指令结尾
+	/**
+	 * 模块类型
+	 * nginx支持的所有模块类型：
+	 * NGX_CORE_MODULE
+	 * NGX_CONF_MODULE
+	 * NGX_HTTP_MODULE
+	 * NGX_EVENT_MODULE
+	 * NGX_MAIL_MODULE
+	 * 这些不同的类型也指定不同的ctx
+	**/
     ngx_uint_t            type;
 
     ngx_int_t           (*init_master)(ngx_log_t *log);
 
+	/** 初始化完所有模块后调用 在ngx_int_cycle函数 **/
     ngx_int_t           (*init_module)(ngx_cycle_t *cycle);
 
+	/** 初始化完worker进程后调用 在ngx_worker_process_init函数 **/
     ngx_int_t           (*init_process)(ngx_cycle_t *cycle);
     ngx_int_t           (*init_thread)(ngx_cycle_t *cycle);
     void                (*exit_thread)(ngx_cycle_t *cycle);

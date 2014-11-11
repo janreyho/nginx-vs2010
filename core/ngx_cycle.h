@@ -34,6 +34,12 @@ struct ngx_shm_zone_s {
 
 
 struct ngx_cycle_s {
+	/**
+	 * 所有core module的配置结构信息数组，大小是ngx_max_module
+	 * 配置结构信息由ngx_core_module_t的create_config回调函数生成，并有init_config回调函数初始化
+	 *
+	 *
+	**/
     void                  ****conf_ctx;
     ngx_pool_t               *pool;
 

@@ -1632,6 +1632,7 @@ ngx_http_process_request(ngx_http_request_t *r)
 
 #endif
 
+	// 删除之前设置的读事件的timer
     if (c->read->timer_set) {
         ngx_del_timer(c->read);
     }
@@ -1647,8 +1648,10 @@ ngx_http_process_request(ngx_http_request_t *r)
     c->write->handler = ngx_http_request_handler;
     r->read_event_handler = ngx_http_block_reading;
 
+	// 继续处理请求
     ngx_http_handler(r);
 
+	// 处理子请求
     ngx_http_run_posted_requests(c);
 }
 

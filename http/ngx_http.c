@@ -233,8 +233,8 @@ ngx_http_block(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
 
     /* parse inside the http{} block */
 
-    cf->module_type = NGX_HTTP_MODULE;
-    cf->cmd_type = NGX_HTTP_MAIN_CONF;
+	cf->module_type = NGX_HTTP_MODULE;
+	cf->cmd_type = NGX_HTTP_MAIN_CONF;
     rv = ngx_conf_parse(cf, NULL);
 
     if (rv != NGX_CONF_OK) {
@@ -1733,6 +1733,7 @@ ngx_http_add_listening(ngx_conf_t *cf, ngx_http_conf_addr_t *addr)
 
     ls->addr_ntop = 1;
 
+	//设置监听socket的handler.在监听到新的连接时调用，即ngx_event_accept中
     ls->handler = ngx_http_init_connection;
 
     cscf = addr->default_server;

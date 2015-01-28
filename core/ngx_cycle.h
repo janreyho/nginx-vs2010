@@ -43,35 +43,44 @@ struct ngx_cycle_s {
     void                  ****conf_ctx;
     ngx_pool_t               *pool;
 
+	/**
+	 * 日志模块中提供了生成基本ngx_log_t日志对象的功能
+	**/
     ngx_log_t                *log;
     ngx_log_t                 new_log;
 
+	/**
+	 * files保存所有ngx_connection_t的指针组成的数组
+	 * files_n就是指针的总数
+	 * 而文件句柄的值用来访问files数组成员
+	**/
     ngx_connection_t        **files;
     ngx_connection_t         *free_connections;
     ngx_uint_t                free_connection_n;
 
     ngx_queue_t               reusable_connections_queue;
 
-    ngx_array_t               listening;
-    ngx_array_t               pathes;
-    ngx_list_t                open_files;
-    ngx_list_t                shared_memory;
+    ngx_array_t               listening;	//存储ngx_listening_t成员
+    ngx_array_t               pathes;	//保存着Nginx所有要操作的目录，如果目录不存在，则会试图创建，而创建目录失败将会导致Nginx启动失败
+    ngx_list_t                open_files;	//保存Nginx已经打开的所有文件(ngx_open_file_t结构体)的单链表
+    ngx_list_t                shared_memory;	//单链表存储ngx_shm_zone_t，每个元素表示一块共享内存
 
+	//表示当前进程中所有连接对象的总数，与下面的connections成员配合使用
     ngx_uint_t                connection_n;
-    ngx_uint_t                files_n;
+    ngx_uint_t                files_n;	//表示files数组中ngx_connection_t指针的总数
 
-    ngx_connection_t         *connections;
+    ngx_connection_t         *connections;	//指向当前进程中的所有连接对象，每个连接对象对应一个写事件和一个读事件
     ngx_event_t              *read_events;
     ngx_event_t              *write_events;
 
     ngx_cycle_t              *old_cycle;
 
-    ngx_str_t                 conf_file;
-    ngx_str_t                 conf_param;
+    ngx_str_t                 conf_file;	
+    ngx_str_t                 conf_param;	//Nginx处理配置文件时需要特殊处理的在命令行携带的参数，一般是-g选项携带的参数
     ngx_str_t                 conf_prefix;
     ngx_str_t                 prefix;
-    ngx_str_t                 lock_file;
-    ngx_str_t                 hostname;
+    ngx_str_t                 lock_file;	//用于进程间同步的文件锁名称
+    ngx_str_t                 hostname;	//使用gethostname系统调用得到的主机名
 };
 
 

@@ -3,10 +3,20 @@
 #include <ngx_http.h>
 
 
+typedef struct
+{
+    ngx_str_t		stock[6];
+} ngx_http_mytest_ctx_t;
+
+
 static char *
 ngx_http_mytest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
 static ngx_int_t ngx_http_mytest_handler(ngx_http_request_t *r);
+static ngx_int_t mytest_subrequest_post_handler(ngx_http_request_t *r, void *data, ngx_int_t rc);
+static void
+mytest_post_handler(ngx_http_request_t * r);
+
 
 
 
@@ -56,9 +66,116 @@ ngx_module_t  ngx_http_mytest_module =
     NGX_MODULE_V1_PADDING
 };
 
+static ngx_int_t mytest_subrequest_post_handler(ngx_http_request_t *r,
+                                                void *data, ngx_int_t rc)
+{
+	ngx_buf_t* pRecvBuf;
+	int flag;
+    //当前请求r是子请求，它的parent成员就指向父请求
+    ngx_http_request_t          *pr = r->parent;
+    //注意，上下文是保存在父请求中的（参见5.6.5节），所以要由pr中取上下文。
+//其实有更简单的方法，即参数data就是上下文，初始化subrequest时
+//我们就对其进行设置了的，这里仅为了说明如何获取到父请求的上下文
+    ngx_http_mytest_ctx_t* myctx = ngx_http_get_module_ctx(pr, ngx_http_mytest_module);
+
+    pr->headers_out.status = r->headers_out.status;
+    //如果返回NGX_HTTP_OK（也就是200）意味着访问新浪服务器成功，接着将
+//开始解析http包体
+    if (r->headers_out.status == NGX_HTTP_OK)
+    {
+        flag = 0;
+
+        //在不转发响应时，buffer中会保存着上游服务器的响应。特别是在使用
+//反向代理模块访问上游服务器时，如果它使用upstream机制时没有重定义
+//input_filter方法，upstream机制默认的input_filter方法会试图
+//把所有的上游响应全部保存到buffer缓冲区中
+        pRecvBuf = &r->upstream->buffer;
+
+        //以下开始解析上游服务器的响应，并将解析出的值赋到上下文结构体
+//myctx->stock数组中
+        for (; pRecvBuf->pos != pRecvBuf->last; pRecvBuf->pos++)
+        {
+            if (*pRecvBuf->pos == ',' || *pRecvBuf->pos == '\"')
+            {
+                if (flag > 0)
+                {
+                    myctx->stock[flag - 1].len = pRecvBuf->pos - myctx->stock[flag - 1].data;
+                }
+                flag++;
+                myctx->stock[flag - 1].data = pRecvBuf->pos + 1;
+            }
+
+            if (flag > 6)
+                break;
+        }
+    }
+
+
+    //这一步很重要，设置接下来父请求的回调方法
+    pr->write_event_handler = mytest_post_handler;
+
+    return NGX_OK;
+}
+
+
+static void
+mytest_post_handler(ngx_http_request_t * r)
+{
+	int bodylen;
+	ngx_buf_t* b;
+	ngx_chain_t out;
+	ngx_int_t ret;
+	ngx_http_mytest_ctx_t* myctx;
+	ngx_str_t output_format;
+	static ngx_str_t type;
+    //如果没有返回200则直接把错误码发回用户
+    if (r->headers_out.status != NGX_HTTP_OK)
+    {
+        ngx_http_finalize_request(r, r->headers_out.status);
+        return;
+    }
+
+    //当前请求是父请求，直接取其上下文
+    myctx = ngx_http_get_module_ctx(r, ngx_http_mytest_module);
+
+    //定义发给用户的http包体内容，格式为：
+//stock[…],Today current price: …, volumn: …
+    output_format.data = "stock[%V],Today current price: %V, volumn: %V";
+	output_format.len = sizeof("stock[%V],Today current price: %V, volumn: %V") - 1;
+
+    //计算待发送包体的长度
+    bodylen = output_format.len + myctx->stock[0].len
+                  + myctx->stock[1].len + myctx->stock[4].len - 6;
+    r->headers_out.content_length_n = bodylen;
+
+    //在内存池上分配内存保存将要发送的包体
+    b = ngx_create_temp_buf(r->pool, bodylen);
+    ngx_snprintf(b->pos, bodylen, (char*)output_format.data,
+                 &myctx->stock[0], &myctx->stock[1], &myctx->stock[4]);
+    b->last = b->pos + bodylen;
+    b->last_buf = 1;
+
+    out.buf = b;
+    out.next = NULL;
+    //设置Content-Type，注意汉字编码新浪服务器使用了GBK
+    type.data = "text/plain; charset=GBK";
+	type.len = sizeof("text/plain; charset=GBK") - 1;
+    r->headers_out.content_type = type;
+    r->headers_out.status = NGX_HTTP_OK;
+
+    r->connection->buffered |= NGX_HTTP_WRITE_BUFFERED;
+    ret = ngx_http_send_header(r);
+    ret = ngx_http_output_filter(r, &out);
+
+    //注意，这里发送完响应后必须手动调用ngx_http_finalize_request
+//结束请求，因为这时http框架不会再帮忙调用它
+    ngx_http_finalize_request(r, ret);
+}
+
+
 
 static char *
-ngx_http_mytest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+ngx_http_mytest(ngx_conf_t * cf, ngx_command_t * cmd, void * conf)
 {
     ngx_http_core_loc_conf_t  *clcf;
 
@@ -75,106 +192,64 @@ ngx_http_mytest(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
     return NGX_CONF_OK;
 }
 
-
-static ngx_int_t ngx_http_mytest_handler(ngx_http_request_t *r)
+static ngx_int_t
+ngx_http_mytest_handler(ngx_http_request_t * r)
 {
+	ngx_str_t sub_prefix;
+    ngx_str_t sub_location;
 	ngx_int_t rc;
-	ngx_buf_t *b;
-	u_char* filename;
-	ngx_pool_cleanup_t* cln;
-	ngx_pool_cleanup_file_t  *clnf;
-	ngx_str_t type;
-	ngx_chain_t		out;//构造发送时的ngx_chain_t结构体
-
-    //必须是GET或者HEAD方法，否则返回405 Not Allowed
-    if (!(r->method & (NGX_HTTP_GET | NGX_HTTP_HEAD)))
+	ngx_http_request_t *sr;
+	ngx_http_post_subrequest_t *psr;
+    //创建http上下文
+    ngx_http_mytest_ctx_t* myctx = ngx_http_get_module_ctx(r, ngx_http_mytest_module);
+    if (myctx == NULL)
     {
-        return NGX_HTTP_NOT_ALLOWED;
+        myctx = ngx_palloc(r->pool, sizeof(ngx_http_mytest_ctx_t));
+        if (myctx == NULL)
+        {
+            return NGX_ERROR;
+        }
+
+        //将上下文设置到原始请求r中
+        ngx_http_set_ctx(r, myctx, ngx_http_mytest_module);
     }
 
-    //丢弃请求中的包体
-    rc = ngx_http_discard_request_body(r);
-    if (rc != NGX_OK)
-    {
-        return rc;
-    }
-
-    b = ngx_palloc(r->pool, sizeof(ngx_buf_t));
-
-    //要打开的文件
-    filename = (u_char*)"/tmp/test.txt";
-    b->in_file = 1;
-    b->file = ngx_pcalloc(r->pool, sizeof(ngx_file_t));
-    b->file->fd = ngx_open_file(filename, NGX_FILE_RDONLY | NGX_FILE_NONBLOCK, NGX_FILE_OPEN, 0);
-    b->file->log = r->connection->log;
-    b->file->name.data = filename;
-    b->file->name.len = sizeof(filename) - 1;
-    if (b->file->fd <= 0)
-    {
-        return NGX_HTTP_NOT_FOUND;
-    }
-
-    //支持断点续传
-    r->allow_ranges = 1;
-
-    //获取文件长度
-    if (ngx_file_info(filename, &b->file->info) == NGX_FILE_ERROR)
+    // ngx_http_post_subrequest_t结构体会决定子请求的回调方法，参见5.4.1节
+    psr = ngx_palloc(r->pool, sizeof(ngx_http_post_subrequest_t));
+    if (psr == NULL)
     {
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
     }
 
-    //设置缓冲区指向的文件块
-    b->file_pos = 0;
-    //b->file_last = b->file->info.st_size;
-	b->file_last = b->file->info.nFileIndexHigh;
-	b->file_last = b->file_last << 32;
-	b->file_last = b->file_last & b->file->info.nFileIndexLow;
+    //设置子请求回调方法为mytest_subrequest_post_handler
+    psr->handler = mytest_subrequest_post_handler;
 
-    cln = ngx_pool_cleanup_add(r->pool, sizeof(ngx_pool_cleanup_file_t));
-    if (cln == NULL)
+    //data设为myctx上下文，这样回调mytest_subrequest_post_handler
+//时传入的data参数就是myctx
+    psr->data = myctx;
+
+    //子请求的URI前缀是/list，这是因为访问新浪服务器的请求必须是类
+//似/list=s_sh000001这样的URI，这与5.6.1节在nginx.conf中
+//配置的子请求location中的URI是一致的
+    sub_prefix.data = "/list=";
+	sub_prefix.len = sizeof("/list=") - 1;
+    sub_location.len = sub_prefix.len + r->args.len;
+    sub_location.data = ngx_palloc(r->pool, sub_location.len);
+    ngx_snprintf(sub_location.data, sub_location.len,
+                 "%V%V", &sub_prefix, &r->args);
+
+    //sr就是子请求
+    //调用ngx_http_subrequest创建子请求，它只会返回NGX_OK
+//或者NGX_ERROR。返回NGX_OK时，sr就已经是合法的子请求。注意，这里
+//的NGX_HTTP_SUBREQUEST_IN_MEMORY参数将告诉upstream模块把上
+//游服务器的响应全部保存在子请求的sr->upstream->buffer内存缓冲区中
+    rc = ngx_http_subrequest(r, &sub_location, NULL, &sr, psr, NGX_HTTP_SUBREQUEST_IN_MEMORY);
+    if (rc != NGX_OK)
     {
         return NGX_ERROR;
     }
 
-    cln->handler = ngx_pool_cleanup_file;
-    clnf = cln->data;
-
-    clnf->fd = b->file->fd;
-    clnf->name = b->file->name.data;
-    clnf->log = r->pool->log;
-
-
-    //设置返回的Content-Type。注意，ngx_str_t有一个很方便的初始化宏
-//ngx_string，它可以把ngx_str_t的data和len成员都设置好
-    //type = ngx_string("text/plain");
-	type.data = "text/plain";
-	type.len = sizeof("text/plain") - 1;
-
-    //设置返回状态码
-    r->headers_out.status = NGX_HTTP_OK;
-    //响应包是有包体内容的，所以需要设置Content-Length长度
-    //r->headers_out.content_length_n = b->file->info.st_size;
-	r->headers_out.content_length_n = b->file->info.nFileIndexHigh;
-	r->headers_out.content_length_n = r->headers_out.content_length_n << 32;
-	r->headers_out.content_length_n = r->headers_out.content_length_n & b->file->info.nFileIndexLow;
-    //设置Content-Type
-    r->headers_out.content_type = type;
-
-    //发送http头部
-    rc = ngx_http_send_header(r);
-    if (rc == NGX_ERROR || rc > NGX_OK || r->header_only)
-    {
-        return rc;
-    }
-
-    //赋值ngx_buf_t
-    out.buf = b;
-    //设置next为NULL
-    out.next = NULL;
-
-    //最后一步发送包体，http框架会调用ngx_http_finalize_request方法
-//结束请求
-    return ngx_http_output_filter(r, &out);
+    //必须返回NGX_DONE，理由同upstream
+    return NGX_DONE;
 }
-
 

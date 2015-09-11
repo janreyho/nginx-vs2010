@@ -51,7 +51,7 @@ typedef struct {
     union {
         struct sockaddr        sockaddr;
 		struct sockaddr_in     sockaddr_in;
-#if (NGX_HAVE_INET6).
+#if (NGX_HAVE_INET6)
         struct sockaddr_in6    sockaddr_in6;
 #endif
 #if (NGX_HAVE_UNIX_DOMAIN)
